@@ -82,7 +82,7 @@ export default function Utenti() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-[#1c2b22]">Utenti</h2>
-          <p className="text-sm text-[#4a5d50]">Account di accesso all'applicazione</p>
+          <p className="text-sm text-[#4a5d50]">{"Account di accesso all'applicazione"}</p>
         </div>
         <Btn onClick={apriNuovo}><Plus size={16} weight="bold" /> Nuovo utente</Btn>
       </div>
