@@ -1,0 +1,16 @@
+# ─── Nuova Onda Box · configurazione Cloudflare ─────────────────────────────
+# Deploy su Cloudflare Pages: frontend statico (cartella "out", generata da
+# `npm run build` → Next.js static export) + API serverless in `functions/`
+# (Pages Functions) con database Cloudflare D1 (binding "DB").
+
+name = "nuova-onda-box"
+compatibility_date = "2024-09-25"
+pages_build_output_dir = "out"
+
+# Database D1 condiviso: tutti i dispositivi leggono/scrivono lo stesso archivio.
+# 1. Crea il database:   npx wrangler d1 create nuova-onda-db
+# 2. Copia il database_id restituito dal comando qui sotto.
+[[d1_databases]]
+binding = "DB"
+database_name = "nuova-onda-db"
+database_id = "INSERISCI_QUI_IL_TUO_DATABASE_ID"

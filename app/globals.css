@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme inline {
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+:root {
+  /* Palette aziendale Nuova Onda Box — verde + giallo */
+  --kraft-50: #f7faf5;
+  --kraft-100: #eef4ec;
+  --kraft-200: #cfe3d2;
+  --kraft-300: #b9d6c0;
+  --kraft-400: #8fb894;
+  --kraft-500: #5e8a6d;
+  --kraft-600: #4e7a5f;
+  --kraft-700: #3d6b4c;
+  --kraft-800: #146031;
+  --kraft-900: #0f4d27;
+  --ink: #1c2b22;
+  --ink-soft: #3f5248;
+  --brand-green: #1b7a3d;
+  --brand-green-dark: #146031;
+  --brand-yellow: #ffc400;
+  --brand-yellow-strong: #e0a800;
+  --amber-accent: #e0a800;
+  --radius: 0.625rem;
+}
+
+html,
+body {
+  background-color: var(--kraft-50);
+  color: var(--ink);
+}
+
+/* Texture leggera "carta" per l'area contenuto */
+.paper-texture {
+  background-image: radial-gradient(
+      circle at 1px 1px,
+      rgba(122, 90, 62, 0.05) 1px,
+      transparent 0
+    );
+  background-size: 22px 22px;
+}
+
+/* Scrollbar discreta */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--kraft-300);
+  border-radius: 8px;
+  border: 2px solid var(--kraft-50);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--kraft-400);
+}
+
+/* Focus visibile per accessibilità */
+:focus-visible {
+  outline: 2px solid var(--amber-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
