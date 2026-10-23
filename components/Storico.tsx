@@ -116,7 +116,7 @@ export default function Storico() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight text-[#1c2b22]">Storico movimenti</h2>
         <p className="text-sm text-[#4a5d50]">
-          Tutti i movimenti registrati, dal più recente · con l'utente che li ha eseguiti
+          {"Tutti i movimenti registrati, dal più recente · con l'utente che li ha eseguiti"}
         </p>
       </div>
 
