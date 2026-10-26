@@ -242,17 +242,27 @@ export const useData = create<DataStore>()((set, get) => ({
 // vivono in localStorage e l'app resta pienamente funzionale. Se l'API torna
 // raggiungibile durante la sessione, la modalità cloud viene ripristinata.
 
-const POLL_MS = 3000;
+// Polling ridotto a 30s (solo a scheda visibile) per non esaurire la quota
+// gratuita giornaliera di richieste Cloudflare; salvataggio con debounce ~2s.
+const POLL_MS = 30000;
+const SAVE_DEBOUNCE_MS = 2000;
+// Backoff progressivo dei tentativi di salvataggio falliti: 10s → 30s → 60s
+const RETRY_DELAYS_MS = [10000, 30000, 60000];
 const CACHE_KEY = "nuova-onda-box-cache-v1";
 
 let started = false;
 let applyingRemote = false;
-let lastLocalChange = 0;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
 let saveInFlight = false;
 let pendingSave = false;
 // Modalità corrente: true = backend Cloudflare attivo, false = solo localStorage
 let cloudMode = false;
+// Flag "modifiche non sincronizzate": true finché lo stato locale non è stato
+// salvato con successo sul server. Finché è true gli stati in arrivo dal
+// polling vengono IGNORATI (mai sovrascrivere/scartare le modifiche locali).
+let hasUnsyncedChanges = false;
 
 function snapshot(): string {
   return JSON.stringify(pickDb(useData.getState()));
@@ -306,10 +316,12 @@ async function pullFromServer(): Promise<boolean> {
     const local = snapshot();
 
     if (remote !== local) {
-      // Se l'utente ha appena modificato qualcosa in locale, la scrittura
-      // locale ha la precedenza: verrà inviata al prossimo giro di save.
-      const localDirty = local !== lastSavedSnapshot && Date.now() - lastLocalChange < 6000;
-      if (!localDirty) {
+      // REGOLA FONDAMENTALE — mai perdere dati locali: lo stato del server
+      // viene applicato SOLO se non ci sono modifiche locali non sincronizzate.
+      // Finché hasUnsyncedChanges è true, gli stati in arrivo dal polling
+      // (anche se più vecchi o diversi) vengono ignorati: la copia locale ha
+      // la precedenza e verrà inviata al server dal prossimo push.
+      if (!hasUnsyncedChanges) {
         applyingRemote = true;
         useData.setState({ ...remoteDb, hydrated: true });
         applyingRemote = false;
@@ -325,16 +337,15 @@ async function pullFromServer(): Promise<boolean> {
       }
     }
     setLastSync(new Date().toISOString());
-    setStatus(saveInFlight || pendingSave ? "syncing" : "synced");
+    setStatus(saveInFlight || pendingSave || hasUnsyncedChanges ? "syncing" : "synced");
     return true;
   } catch {
-    // API irraggiungibile o errore (fetch fallita, 404, D1 non configurato):
-    // passaggio silenzioso alla modalità locale (localStorage) per la sessione.
-    // I dati restano disponibili e l'app continua a funzionare; se l'API torna
-    // raggiungibile, la modalità cloud viene ripristinata automaticamente.
+    // Richiesta fallita (errore di rete o risposta non-200): NON si tocca lo
+    // stato locale e NON si scartano le modifiche. Se il cloud era attivo si
+    // segnala "offline"; altrimenti resta la modalità locale (anteprima).
     const wasCloud = cloudMode;
     cloudMode = false;
-    setStatus(wasCloud ? "offline" : "local");
+    setStatus(wasCloud || hasUnsyncedChanges ? "offline" : "local");
     if (!useData.getState().hydrated) {
       applyingRemote = true;
       useData.setState({ hydrated: true });
@@ -363,18 +374,28 @@ async function pushToServer() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json().catch(() => null);
     if (!json?.ok) throw new Error("Salvataggio rifiutato dal server");
-    // Scrittura riuscita → il backend Cloudflare è attivo
+    // Scrittura riuscita → il backend Cloudflare è attivo e non ci sono più
+    // modifiche locali pendenti: da ora il polling può di nuovo applicare gli
+    // stati in arrivo dal server.
     cloudMode = true;
+    hasUnsyncedChanges = false;
+    retryAttempt = 0;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
     lastSavedSnapshot = snap;
     saveLocalCache();
     setLastSync(new Date().toISOString());
     setStatus("synced");
   } catch {
-    // Backend non disponibile: i dati sono già al sicuro in localStorage
-    // (saveLocalCache viene eseguita a ogni modifica). Modalità locale.
+    // Salvataggio fallito (rete assente o risposta non-200): le modifiche
+    // restano in locale (localStorage) e il flag resta attivo. Riprova con
+    // backoff progressivo: 10s → 30s → 60s (poi sempre 60s).
     const wasCloud = cloudMode;
     cloudMode = false;
-    setStatus(wasCloud ? "offline" : "local");
+    setStatus(wasCloud || hasUnsyncedChanges ? "offline" : "local");
+    if (hasUnsyncedChanges) scheduleRetry();
   } finally {
     saveInFlight = false;
     if (pendingSave) {
@@ -384,11 +405,23 @@ async function pushToServer() {
   }
 }
 
-function scheduleSave(delay = 600) {
+function scheduleSave(delay = SAVE_DEBOUNCE_MS) {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
     pushToServer();
+  }, delay);
+}
+
+// Riprova il salvataggio dopo un fallimento con backoff progressivo
+// (10s, poi 30s, poi 60s; oltre i 60s resta fisso a 60s).
+function scheduleRetry() {
+  if (retryTimer) clearTimeout(retryTimer);
+  const delay = RETRY_DELAYS_MS[Math.min(retryAttempt, RETRY_DELAYS_MS.length - 1)];
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (hasUnsyncedChanges && !saveInFlight) pushToServer();
   }, delay);
 }
 
@@ -408,33 +441,53 @@ export function startCloudSync() {
 
   // 2) Rilevamento automatico dell'ambiente: prova l'API condivisa
   //    (Cloudflare Pages Functions + D1). Se risponde → modalità cloud e i
-  //    dati remoti sovrascrivono quelli locali; se fallisce → modalità
-  //    localStorage, senza errori visibili per l'utente.
+  //    dati remoti vengono applicati (non ci sono ancora modifiche pendenti);
+  //    se fallisce → modalità localStorage, senza errori visibili per l'utente.
   pullFromServer();
 
-  // 3) Polling: in modalità cloud porta gli aggiornamenti dagli altri
-  //    dispositivi; in modalità locale riprova periodicamente l'API e, se
-  //    torna raggiungibile, ripristina automaticamente la modalità cloud.
+  // 3) Polling ogni 30s e SOLO a scheda visibile: in modalità cloud porta gli
+  //    aggiornamenti dagli altri dispositivi; in modalità locale riprova
+  //    l'API e, se torna raggiungibile, ripristina la modalità cloud.
   setInterval(() => {
-    if (document.visibilityState === "visible") pullFromServer();
+    if (document.visibilityState !== "visible") return;
+    if (hasUnsyncedChanges) {
+      // Ci sono modifiche locali non salvate: il polling non serve (verrebbe
+      // ignorato), meglio riprovare direttamente il salvataggio.
+      if (!saveInFlight && !saveTimer && !retryTimer) pushToServer();
+      return;
+    }
+    pullFromServer();
   }, POLL_MS);
 
-  // 4) Refresh immediato quando l'app torna in primo piano (tipico su telefono)
+  // 4) Quando l'app torna in primo piano (tipico su telefono): se ci sono
+  //    modifiche pendenti riprova subito il salvataggio, altrimenti aggiorna.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") pullFromServer();
+    if (document.visibilityState !== "visible") return;
+    if (hasUnsyncedChanges) {
+      if (!saveInFlight) pushToServer();
+    } else {
+      pullFromServer();
+    }
   });
-  window.addEventListener("focus", () => pullFromServer());
+  window.addEventListener("focus", () => {
+    if (hasUnsyncedChanges) {
+      if (!saveInFlight) pushToServer();
+    } else {
+      pullFromServer();
+    }
+  });
   // Al ritorno della connessione: invia subito le modifiche fatte offline
   window.addEventListener("online", () => {
-    if (snapshot() !== lastSavedSnapshot) pushToServer();
+    if (hasUnsyncedChanges || snapshot() !== lastSavedSnapshot) pushToServer();
     else pullFromServer();
   });
 
   // 5) A ogni modifica locale: salva subito in localStorage (modalità locale
-  //    e cache offline) e, se il backend cloud è attivo, pianifica il push.
+  //    e cache offline), marca il flag "modifiche non sincronizzate" e
+  //    pianifica il push al server con debounce di ~2 secondi.
   useData.subscribe(() => {
     if (applyingRemote) return;
-    lastLocalChange = Date.now();
+    hasUnsyncedChanges = true;
     saveLocalCache();
     if (cloudMode) {
       useSync.getState().setStatus("syncing");
