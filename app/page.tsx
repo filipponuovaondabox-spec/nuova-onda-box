@@ -89,7 +89,7 @@ function SyncIndicator() {
           ? "Caricamento…"
           : sync.status === "local"
             ? "Dati locali"
-            : "Offline";
+            : "Connessione assente — i dati restano su questo dispositivo e verranno inviati appena possibile";
   return (
     <div
       className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
@@ -104,13 +104,15 @@ function SyncIndicator() {
       title={
         sync.status === "local"
           ? "Modalità locale: dati salvati su questo dispositivo"
-          : sync.lastSync
-            ? `Ultimo sync: ${new Date(sync.lastSync).toLocaleTimeString("it-IT")}`
-            : "Mai sincronizzato"
+          : sync.status === "offline"
+            ? "Connessione assente — i dati restano su questo dispositivo e verranno inviati appena possibile"
+            : sync.lastSync
+              ? `Ultimo sync: ${new Date(sync.lastSync).toLocaleTimeString("it-IT")}`
+              : "Mai sincronizzato"
       }
     >
-      {icon}
-      {label}
+      <span className="shrink-0">{icon}</span>
+      <span className={sync.status === "offline" ? "leading-snug" : ""}>{label}</span>
     </div>
   );
 }
@@ -135,8 +137,21 @@ export default function Page() {
     initAuth();
     startCloudSync();
     setHydrated(true);
+    // Il service worker PWA va disattivato in anteprima/sviluppo: la sua cache
+    // "cache-first" serve chunk JS e payload RSC obsoleti dopo ogni nuova build,
+    // il che blocca il rendering della pagina (schermata vuota). Qui rimuoviamo
+    // eventuali registrazioni precedenti e svuotiamo le cache create da sw.js.
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((regs) => regs.forEach((r) => r.unregister()))
+        .catch(() => {});
+      if ("caches" in window) {
+        caches
+          .keys()
+          .then((keys) => keys.forEach((k) => caches.delete(k)))
+          .catch(() => {});
+      }
     }
   }, []);
 
