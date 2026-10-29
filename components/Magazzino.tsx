@@ -26,6 +26,9 @@ export default function Magazzino() {
             .reduce((s, o) => s + ordineProdotti(o), 0),
           giacenza: giacenzaScatoleArticolo(db, a.id),
         }))
+        // Articoli con giacenza 0: merce spedita/consegnata, non più fisicamente
+        // presente in magazzino → esclusi dalla vista (lo storico resta in Storico)
+        .filter((r) => r.giacenza > 0)
         .sort((a, b) => a.giacenza - b.giacenza),
     [db]
   );
@@ -46,11 +49,10 @@ export default function Magazzino() {
         />
         <Table head={["Articolo", "Cliente", "Formato", "Tipologia", "Dimensione Scatola", "Entrati", "Prodotti", "Giacenza"]}>
           {righe.map((r) => {
-            const esaurito = r.giacenza <= 0;
             return (
               <tr
                 key={r.articolo.id}
-                className={esaurito ? "bg-red-50 hover:bg-red-100/70" : "hover:bg-[#f7faf5]"}
+                className="hover:bg-[#f7faf5]"
               >
                 <td className="px-4 py-2.5 font-mono text-xs font-bold text-[#0f4d27]">
                   {r.articolo.codice}
@@ -76,7 +78,7 @@ export default function Magazzino() {
           {righe.length === 0 && (
             <tr>
               <td colSpan={8} className="px-4 py-6 text-center text-[#4a5d50]">
-                Nessun articolo in anagrafica
+                Nessun articolo in giacenza
               </td>
             </tr>
           )}
