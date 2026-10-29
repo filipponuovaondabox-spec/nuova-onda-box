@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Plus, PencilSimple, Trash, CaretDown, CaretUp, Factory, FileImage, FilePdf, UploadSimple, X } from "@phosphor-icons/react";
+import { useMemo, useRef, useState } from "react";
+import { Plus, PencilSimple, Trash, CaretDown, CaretUp, Factory, FileImage, FilePdf, UploadSimple, X, MagnifyingGlass } from "@phosphor-icons/react";
 import { useData, useToasts, utenteCorrente } from "@/lib/store";
 import {
   Articolo, TIPI_CARTONE, TIPI_STAMPA, TIPI_PEDANA,
@@ -29,7 +29,18 @@ export default function SchedeArticolo() {
   const [espansa, setEspansa] = useState<string | null>(null);
   const [daEliminare, setDaEliminare] = useState<Articolo | null>(null);
   const [bozzaAperta, setBozzaAperta] = useState<Articolo | null>(null);
+  const [ricerca, setRicerca] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Filtro live: cerca nel codice articolo e nel nome del cliente (case-insensitive)
+  const articoliFiltrati = useMemo(() => {
+    const q = ricerca.trim().toLowerCase();
+    if (!q) return db.articoli;
+    return db.articoli.filter((a) => {
+      const cliente = nomeCliente(db, a.clienteId, a.clienteLibero).toLowerCase();
+      return a.codice.toLowerCase().includes(q) || cliente.includes(q);
+    });
+  }, [db, ricerca]);
 
   const apriNuovo = () => {
     setEditingId(null);
@@ -112,14 +123,46 @@ export default function SchedeArticolo() {
         )}
       </div>
 
+      {db.articoli.length > 0 && (
+        <div className="relative max-w-md">
+          <MagnifyingGlass
+            size={16}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#7fa08a]"
+          />
+          <input
+            type="text"
+            className="w-full rounded-lg border border-[#b9d6c0] bg-white py-2 pl-9 pr-9 text-sm focus:border-[#4e7a5f] focus:outline-none"
+            placeholder="Cerca per codice articolo o cliente…"
+            value={ricerca}
+            onChange={(e) => setRicerca(e.target.value)}
+          />
+          {ricerca && (
+            <button
+              type="button"
+              onClick={() => setRicerca("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-[#7fa08a] hover:bg-[#eef4ec] hover:text-[#3d6b4c]"
+              aria-label="Cancella ricerca"
+            >
+              <X size={14} weight="bold" />
+            </button>
+          )}
+        </div>
+      )}
+
       {db.articoli.length === 0 && (
         <Card className="p-8 text-center text-sm text-[#4a5d50]">
           Nessuna scheda articolo — crea la prima scheda con il pulsante «Nuova scheda».
         </Card>
       )}
 
+      {db.articoli.length > 0 && articoliFiltrati.length === 0 && (
+        <Card className="p-8 text-center text-sm text-[#4a5d50]">
+          Nessun articolo trovato
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {db.articoli.map((a) => {
+        {articoliFiltrati.map((a) => {
           const storico = storicoArticolo(a.id);
           const aperta = espansa === a.id;
           return (
