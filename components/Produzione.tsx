@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Trash, X, ArrowLeft, Play, Stop, FileImage, FilePdf, NotePencil } from "@phosphor-icons/react";
+import { Plus, Trash, X, ArrowLeft, Play, Stop, FileImage, FilePdf, NotePencil, MagnifyingGlass } from "@phosphor-icons/react";
 import { useData, useToasts, operatoreCorrente, utenteCorrente } from "@/lib/store";
 import {
   Ordine, Pedana, Articolo, fmtNum, fmtPct, fmtData, fmtDataOra, oggiISO, uid, nomeCliente, labelArticolo,
@@ -20,6 +20,7 @@ export default function Produzione() {
   const [terminaOpen, setTerminaOpen] = useState(false);
   const [daEliminare, setDaEliminare] = useState<Ordine | null>(null);
   const [bozzaAperta, setBozzaAperta] = useState<Articolo | null>(null);
+  const [ricerca, setRicerca] = useState("");
 
   // Form nuovo ordine
   const [nArticolo, setNArticolo] = useState(db.articoli[0]?.id ?? "");
@@ -41,6 +42,17 @@ export default function Produzione() {
     () => db.entrate.filter((e) => e.articoloId === nArticolo),
     [db.entrate, nArticolo]
   );
+
+  // Filtro live: cerca nel nome/codice articolo e nel nome del cliente (case-insensitive)
+  const ordiniFiltrati = useMemo(() => {
+    const q = ricerca.trim().toLowerCase();
+    if (!q) return db.ordini;
+    return db.ordini.filter((o) => {
+      const articolo = labelArticolo(db, o.articoloId).toLowerCase();
+      const cliente = nomeCliente(db, o.clienteId, o.clienteLibero).toLowerCase();
+      return articolo.includes(q) || cliente.includes(q);
+    });
+  }, [db, ricerca]);
 
   const creaOrdine = (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -347,9 +359,35 @@ export default function Produzione() {
         <Btn onClick={() => setNuovoOpen(true)}><Plus size={16} weight="bold" /> Nuovo ordine</Btn>
       </div>
 
+      {db.ordini.length > 0 && (
+        <div className="relative max-w-md">
+          <MagnifyingGlass
+            size={16}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#7fa08a]"
+          />
+          <input
+            type="text"
+            className="w-full rounded-lg border border-[#b9d6c0] bg-white py-2 pl-9 pr-9 text-sm focus:border-[#4e7a5f] focus:outline-none"
+            placeholder="Cerca per articolo o cliente..."
+            value={ricerca}
+            onChange={(e) => setRicerca(e.target.value)}
+          />
+          {ricerca && (
+            <button
+              type="button"
+              onClick={() => setRicerca("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-[#7fa08a] hover:bg-[#eef4ec] hover:text-[#3d6b4c]"
+              aria-label="Cancella ricerca"
+            >
+              <X size={14} weight="bold" />
+            </button>
+          )}
+        </div>
+      )}
+
       <Card>
         <Table head={["Codice", "Articolo", "Cliente", "Da produrre", "Prodotti", "Scarto", "Scadenza", "Stato", "Avanzamento", "Azioni", ""]}>
-          {db.ordini.map((o) => (
+          {ordiniFiltrati.map((o) => (
             <tr key={o.id} className="cursor-pointer hover:bg-[#f7faf5]" onClick={() => setSelezionato(o.id)}>
               <td className="px-4 py-3 font-mono text-xs font-semibold">{o.codice}</td>
               <td className="px-4 py-3">{labelArticolo(db, o.articoloId)}</td>
@@ -411,6 +449,9 @@ export default function Produzione() {
           ))}
           {db.ordini.length === 0 && (
             <tr><td colSpan={11} className="px-4 py-6 text-center text-[#4a5d50]">Nessun ordine di produzione</td></tr>
+          )}
+          {db.ordini.length > 0 && ordiniFiltrati.length === 0 && (
+            <tr><td colSpan={11} className="px-4 py-6 text-center text-[#4a5d50]">Nessun ordine trovato per la ricerca</td></tr>
           )}
         </Table>
       </Card>
