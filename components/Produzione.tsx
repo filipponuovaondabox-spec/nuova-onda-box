@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Trash, X, ArrowLeft, Play, Stop, FileImage, FilePdf } from "@phosphor-icons/react";
+import { Plus, Trash, X, ArrowLeft, Play, Stop, FileImage, FilePdf, NotePencil } from "@phosphor-icons/react";
 import { useData, useToasts, operatoreCorrente, utenteCorrente } from "@/lib/store";
 import {
   Ordine, Pedana, Articolo, fmtNum, fmtPct, fmtData, fmtDataOra, oggiISO, uid, nomeCliente, labelArticolo,
@@ -59,6 +59,7 @@ export default function Produzione() {
       id: uid("or"), codice: `OP-${maxCod + 1}`, articoloId: nArticolo,
       entrataId: nEntrata || undefined, clienteId: art.clienteId, clienteLibero: art.clienteLibero,
       qtaRichiesta: qta, scadenza: nScadenza, stato: "da_produrre", registrazioni: [], creatoIl: oggiISO(),
+      noteArticolo: art.note?.trim() ? art.note : undefined,
     });
     push(`Ordine OP-${maxCod + 1} creato`);
     setNuovoOpen(false);
@@ -161,6 +162,23 @@ export default function Produzione() {
             </Btn>
           )}
         </div>
+
+        {/* Note articolo — ben visibili per l'operatore */}
+        {(ordine.noteArticolo ?? articoloOrdine?.note)?.trim() && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-400/30 text-amber-800">
+                <NotePencil size={18} weight="bold" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-xs font-bold uppercase tracking-wide text-amber-800">Note articolo</div>
+                <p className="mt-1 whitespace-pre-wrap text-sm font-medium leading-relaxed text-amber-900">
+                  {ordine.noteArticolo ?? articoloOrdine?.note}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Scheda articolo con bozza di stampa */}
         {articoloOrdine && (
@@ -408,6 +426,25 @@ export default function Produzione() {
               ))}
             </SelectInput>
           </Field>
+          {(() => {
+            const artSel = db.articoli.find((a) => a.id === nArticolo);
+            if (!artSel) return null;
+            return artSel.note?.trim() ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-400/30 text-amber-800">
+                    <NotePencil size={16} weight="bold" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold uppercase tracking-wide text-amber-800">Note articolo</div>
+                    <p className="mt-0.5 whitespace-pre-wrap text-sm font-medium leading-relaxed text-amber-900">{artSel.note}</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs italic text-[#7fa08a]">Nessuna nota per questo articolo.</p>
+            );
+          })()}
           <Field label="Entrata collegata" hint="Opzionale: attinge dalla giacenza di questa entrata">
             <SelectInput value={nEntrata} onChange={(e) => setNEntrata(e.target.value)}>
               <option value="">Nessuna</option>
