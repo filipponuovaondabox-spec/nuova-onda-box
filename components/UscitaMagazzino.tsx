@@ -5,7 +5,7 @@ import { PaperPlaneTilt, Trash, MagnifyingGlass } from "@phosphor-icons/react";
 import { useData, useToasts, operatoreCorrente, utenteCorrente } from "@/lib/store";
 import {
   Spedizione, TRASPORTO, fmtNum, fmtData, oggiISO, uid, nomeCliente, labelArticolo,
-  ordineImballati, disponibilePerOrdine,
+  ordineImballati, disponibilePerOrdine, giacenzaScatoleArticolo,
 } from "@/lib/model";
 import { Card, CardHeader, Table, Btn, Field, TextInput, SelectInput, TextArea, ConfirmModal, StatusBadge } from "./ui-kit";
 
@@ -21,7 +21,6 @@ export default function UscitaMagazzino() {
   );
 
   const [ordineId, setOrdineId] = useState("");
-  const [clienteId, setClienteId] = useState("");
   const [data, setData] = useState(oggiISO());
   const [numPedane, setNumPedane] = useState("");
   const [pezzi, setPezzi] = useState("");
@@ -35,6 +34,19 @@ export default function UscitaMagazzino() {
 
   const ordineSel = db.ordini.find((o) => o.id === ordineId) ?? null;
   const disponibile = ordineSel ? disponibilePerOrdine(db.spedizioni, ordineSel) : 0;
+  // Giacenza complessiva dell'articolo collegato all'ordine selezionato
+  const giacenzaArticolo = ordineSel ? giacenzaScatoleArticolo(db, ordineSel.articoloId) : 0;
+  // Il cliente deriva sempre dall'articolo dell'ordine selezionato (campo in sola lettura)
+  const clienteAuto = ordineSel
+    ? nomeCliente(db, ordineSel.clienteId, ordineSel.clienteLibero)
+    : "";
+
+  // Validazione in tempo reale: la quantità non può superare la giacenza disponibile
+  const pezziNum = parseInt(pezzi, 10);
+  const erroreQuantita =
+    ordineSel && !isNaN(pezziNum) && pezziNum > Math.min(disponibile, giacenzaArticolo)
+      ? `Quantità non disponibile: giacenza articolo ${fmtNum(giacenzaArticolo)} pezzi (max spedibile per questo ordine: ${fmtNum(disponibile)})`
+      : null;
 
   const spedizioniFiltrate = useMemo(() => {
     return db.spedizioni.filter((s) => {
@@ -58,11 +70,15 @@ export default function UscitaMagazzino() {
       push(`Quantità non disponibile: puoi spedire al massimo ${fmtNum(disponibile)} pezzi per questo ordine`, "errore");
       return;
     }
+    if (nPezzi > giacenzaArticolo) {
+      push(`Quantità non disponibile: giacenza articolo insufficiente (${fmtNum(giacenzaArticolo)} pezzi in magazzino)`, "errore");
+      return;
+    }
     if (!ddt.trim()) { push("Inserisci il numero DDT", "errore"); return; }
 
     db.addSpedizione({
       id: uid("sp"), ordineId: ordineSel.id, articoloId: ordineSel.articoloId,
-      clienteId: clienteId || ordineSel.clienteId, clienteLibero: ordineSel.clienteLibero,
+      clienteId: ordineSel.clienteId, clienteLibero: ordineSel.clienteLibero,
       data, numPedane: nPed, pezzi: nPezzi, ddt: ddt.trim(), trasporto, note: note.trim(),
       operatore: operatoreCorrente(),
     });
@@ -104,13 +120,14 @@ export default function UscitaMagazzino() {
                 <div><span className="font-semibold">Disponibili:</span> <span className="font-mono font-bold text-[#0f4d27]">{fmtNum(disponibile)}</span> pezzi</div>
               </div>
             )}
-            <Field label="Cliente destinatario" hint="Cliente registrato a cui intestare la spedizione">
-              <SelectInput value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
-                <option value="">Come da ordine…</option>
-                {db.clienti.map((c) => (
-                  <option key={c.id} value={c.id}>{c.nome}</option>
-                ))}
-              </SelectInput>
+            <Field label="Cliente destinatario" hint="Impostato automaticamente dall'articolo dell'ordine selezionato">
+              <TextInput
+                value={clienteAuto}
+                readOnly
+                disabled
+                placeholder="Seleziona prima un ordine…"
+                className="cursor-not-allowed bg-[#eef4ec] font-semibold text-[#3d6b4c] opacity-100"
+              />
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Data">
@@ -124,10 +141,15 @@ export default function UscitaMagazzino() {
               <Field label="Pedane spedite">
                 <TextInput type="number" min={1} value={numPedane} onChange={(e) => setNumPedane(e.target.value)} placeholder="0" />
               </Field>
-              <Field label="Pezzi spediti" hint={ordineSel ? `Max ${fmtNum(disponibile)}` : undefined}>
+              <Field label="Pezzi spediti" hint={ordineSel ? `Max ${fmtNum(disponibile)} · giacenza articolo ${fmtNum(giacenzaArticolo)}` : undefined}>
                 <TextInput type="number" min={1} value={pezzi} onChange={(e) => setPezzi(e.target.value)} placeholder="0" />
               </Field>
             </div>
+            {erroreQuantita && (
+              <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                {erroreQuantita}
+              </p>
+            )}
             <Field label="Trasporto" hint="Trasporto a carico di">
               <SelectInput value={trasporto} onChange={(e) => setTrasporto(e.target.value)}>
                 {TRASPORTO.map((t) => <option key={t}>{t}</option>)}
@@ -136,7 +158,7 @@ export default function UscitaMagazzino() {
             <Field label="Note">
               <TextArea placeholder="Note opzionali…" value={note} onChange={(e) => setNote(e.target.value)} />
             </Field>
-            <Btn type="submit" className="w-full" disabled={ordiniEleggibili.length === 0}>
+            <Btn type="submit" className="w-full" disabled={ordiniEleggibili.length === 0 || !!erroreQuantita}>
               <PaperPlaneTilt size={16} weight="bold" /> Registra uscita
             </Btn>
             {ordiniEleggibili.length === 0 && (
