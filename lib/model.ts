@@ -74,6 +74,7 @@ export interface Ordine {
   qtaRichiesta: number; // fogli da produrre
   scadenza: string; // ISO date
   stato: OrderStatus;
+  noteArticolo?: string; // copia delle note della scheda articolo al momento della creazione
   registrazioni: Registrazione[];
   avviamentoIniziatoIl?: string; // ISO datetime inizio avviamento (setup)
   avviamentoCompletatoIl?: string; // ISO datetime fine avviamento (setup)
