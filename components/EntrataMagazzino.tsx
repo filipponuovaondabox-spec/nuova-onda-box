@@ -14,11 +14,8 @@ export default function EntrataMagazzino() {
   const push = useToasts((s) => s.push);
   const isAdmin = utenteCorrente()?.ruolo === "admin";
 
-  // Form state
+  // Form state — il formato è il campo primario
   const [data, setData] = useState(oggiISO());
-  const [clienteId, setClienteId] = useState(db.clienti[0]?.id ?? "");
-  const [clienteLibero, setClienteLibero] = useState("");
-  const [usaLibero, setUsaLibero] = useState(false);
   const [formato, setFormato] = useState("");
   const [tipoCartone, setTipoCartone] = useState(TIPI_CARTONE[0]);
   const [quantita, setQuantita] = useState("");
@@ -26,34 +23,31 @@ export default function EntrataMagazzino() {
   const [fornitore, setFornitore] = useState("");
   const [note, setNote] = useState("");
 
-  // Articoli collegati al cliente selezionato
-  const articoliCliente = useMemo(
-    () => db.articoli.filter((a) => !usaLibero && a.clienteId === clienteId),
-    [db.articoli, clienteId, usaLibero]
-  );
-
-  // Confronto formato: case-insensitive, ignora gli spazi
-  const normFormato = (s: string) => s.toLowerCase().replace(/\s+/g, "");
+  // Confronto formato: case-insensitive, ignora gli spazi, "x" ≡ "×"
+  const normFormato = (s: string) =>
+    s.toLowerCase().replace(/\s+/g, "").replace(/×/g, "x");
   const formatoNorm = normFormato(formato);
 
   // Il menu delle schede mostra SOLO gli articoli il cui formato corrisponde
-  // a quello digitato; con formato vuoto si vedono tutti gli articoli del cliente
+  // a quello digitato; con formato vuoto si vedono tutte le schede
   const articoliFiltrati = useMemo(() => {
-    if (!formatoNorm) return articoliCliente;
-    return articoliCliente.filter((a) => normFormato(a.formatoCartone ?? "") === formatoNorm);
-  }, [articoliCliente, formatoNorm]);
+    if (!formatoNorm) return db.articoli;
+    return db.articoli.filter((a) => normFormato(a.formatoCartone ?? "") === formatoNorm);
+  }, [db.articoli, formatoNorm]);
 
   const articoloSel = db.articoli.find((a) => a.id === articoloId) ?? null;
+
+  // Il cliente deriva SEMPRE dalla scheda articolo selezionata (campo bloccato)
+  const clienteSel = articoloSel
+    ? db.clienti.find((c) => c.id === articoloSel.clienteId) ?? null
+    : null;
+  const clienteLabel = articoloSel
+    ? clienteSel?.nome ?? articoloSel.clienteLibero ?? "—"
+    : "";
 
   // Cambio formato: resetta la scheda articolo selezionata
   const cambiaFormato = (v: string) => {
     setFormato(v);
-    setArticoloId("");
-  };
-
-  // Selezione cliente: resetta l'articolo scelto
-  const selezionaCliente = (id: string) => {
-    setClienteId(id);
     setArticoloId("");
   };
 
@@ -110,26 +104,26 @@ export default function EntrataMagazzino() {
       push("Inserisci formato e quantità validi", "errore");
       return;
     }
-    if (usaLibero && !clienteLibero.trim()) {
-      push("Inserisci il nome del cliente", "errore");
+    if (!articoloSel) {
+      push("Seleziona una scheda articolo", "errore");
       return;
     }
     const entrata: Entrata = {
       id: uid("en"),
       data,
-      clienteId: usaLibero ? "" : clienteId,
-      clienteLibero: usaLibero ? clienteLibero.trim() : undefined,
+      clienteId: articoloSel.clienteId,
+      clienteLibero: articoloSel.clienteLibero,
       formato: formato.trim(),
       tipoCartone,
       quantita: qta,
-      articoloId: articoloId || "",
+      articoloId: articoloSel.id,
       fornitore: fornitore.trim(),
       note: note.trim(),
       operatore: operatoreCorrente(),
     };
     db.addEntrata(entrata);
     push(`Entrata registrata: ${fmtNum(qta)} fogli ${formato}`);
-    setFormato(""); setQuantita(""); setFornitore(""); setNote(""); setClienteLibero("");
+    setFormato(""); setQuantita(""); setFornitore(""); setNote(""); setArticoloId("");
   };
 
   return (
@@ -147,51 +141,38 @@ export default function EntrataMagazzino() {
             <Field label="Data">
               <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} required />
             </Field>
-            <Field label="Cliente">
-              <div className="space-y-2">
-                <SelectInput
-                  value={usaLibero ? "__libero__" : clienteId}
-                  onChange={(e) => {
-                    if (e.target.value === "__libero__") { setUsaLibero(true); setArticoloId(""); }
-                    else { setUsaLibero(false); selezionaCliente(e.target.value); }
-                  }}
-                >
-                  {db.clienti.map((c) => (
-                    <option key={c.id} value={c.id}>{c.nome}</option>
-                  ))}
-                  <option value="__libero__">Altro (inserimento libero)…</option>
-                </SelectInput>
-                {usaLibero && (
-                  <TextInput
-                    placeholder="Nome cliente"
-                    value={clienteLibero}
-                    onChange={(e) => setClienteLibero(e.target.value)}
-                  />
-                )}
-              </div>
-            </Field>
             <Field label="Formato foglio" hint="es. 100×70 — filtra le schede articolo">
-              <TextInput placeholder="100×70" value={formato} onChange={(e) => cambiaFormato(e.target.value)} />
+              <TextInput placeholder="100×70" value={formato} onChange={(e) => cambiaFormato(e.target.value)} autoFocus />
             </Field>
-            <Field label="Scheda articolo" hint={usaLibero ? "Disponibile solo per clienti in anagrafica" : formatoNorm ? "Solo schede con il formato digitato" : "Solo articoli del cliente selezionato"}>
+            <Field label="Scheda articolo" hint={formatoNorm ? "Solo schede con il formato digitato" : "Digita un formato per filtrare"}>
               <SelectInput
                 value={articoloId}
                 onChange={(e) => selezionaArticolo(e.target.value)}
-                disabled={usaLibero}
               >
                 <option value="">
-                  {usaLibero ? "—" : articoliFiltrati.length === 0 ? "Nessuna scheda disponibile" : "Seleziona articolo…"}
+                  {articoliFiltrati.length === 0 ? "Nessuna scheda disponibile" : "Seleziona articolo…"}
                 </option>
                 {articoliFiltrati.map((a) => (
-                  <option key={a.id} value={a.id}>{a.codice} — {a.dimL}×{a.dimP}×{a.dimH}</option>
+                  <option key={a.id} value={a.id}>
+                    {a.codice} — {nomeCliente(db, a.clienteId, a.clienteLibero)}
+                  </option>
                 ))}
               </SelectInput>
             </Field>
-            {!usaLibero && formatoNorm && articoliFiltrati.length === 0 && (
+            {formatoNorm && articoliFiltrati.length === 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                Nessuna scheda articolo trovata con questo formato
+                Nessuna scheda articolo trovata per questo formato. Creala prima nella sezione Articoli.
               </div>
             )}
+            <Field label="Cliente" hint="Compilato automaticamente dalla scheda articolo">
+              <TextInput
+                value={clienteLabel}
+                readOnly
+                disabled
+                placeholder="Seleziona una scheda articolo…"
+                className="cursor-not-allowed bg-[#eef3ee] text-[#4a5d50]"
+              />
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Quantità fogli">
                 <TextInput type="number" min={1} placeholder="0" value={quantita} onChange={(e) => setQuantita(e.target.value)} />
