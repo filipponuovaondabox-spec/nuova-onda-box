@@ -31,7 +31,25 @@ export default function EntrataMagazzino() {
     () => db.articoli.filter((a) => !usaLibero && a.clienteId === clienteId),
     [db.articoli, clienteId, usaLibero]
   );
+
+  // Confronto formato: case-insensitive, ignora gli spazi
+  const normFormato = (s: string) => s.toLowerCase().replace(/\s+/g, "");
+  const formatoNorm = normFormato(formato);
+
+  // Il menu delle schede mostra SOLO gli articoli il cui formato corrisponde
+  // a quello digitato; con formato vuoto si vedono tutti gli articoli del cliente
+  const articoliFiltrati = useMemo(() => {
+    if (!formatoNorm) return articoliCliente;
+    return articoliCliente.filter((a) => normFormato(a.formatoCartone ?? "") === formatoNorm);
+  }, [articoliCliente, formatoNorm]);
+
   const articoloSel = db.articoli.find((a) => a.id === articoloId) ?? null;
+
+  // Cambio formato: resetta la scheda articolo selezionata
+  const cambiaFormato = (v: string) => {
+    setFormato(v);
+    setArticoloId("");
+  };
 
   // Selezione cliente: resetta l'articolo scelto
   const selezionaCliente = (id: string) => {
@@ -39,12 +57,12 @@ export default function EntrataMagazzino() {
     setArticoloId("");
   };
 
-  // Selezione articolo: compila in automatico formato foglio e tipologia cartone
+  // Selezione articolo: compila in automatico la tipologia cartone
+  // (il formato resta quello digitato, perché funge da filtro)
   const selezionaArticolo = (id: string) => {
     setArticoloId(id);
     const art = db.articoli.find((a) => a.id === id);
     if (art) {
-      if (art.formatoCartone) setFormato(art.formatoCartone);
       if (art.tipoCartone) setTipoCartone(art.tipoCartone);
     }
   };
@@ -152,33 +170,38 @@ export default function EntrataMagazzino() {
                 )}
               </div>
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Formato foglio" hint="es. 1200×2000 mm">
-                <TextInput placeholder="1200×2000" value={formato} onChange={(e) => setFormato(e.target.value)} />
-              </Field>
-              <Field label="Quantità fogli">
-                <TextInput type="number" min={1} placeholder="0" value={quantita} onChange={(e) => setQuantita(e.target.value)} />
-              </Field>
-            </div>
-            <Field label="Tipologia cartone">
-              <SelectInput value={tipoCartone} onChange={(e) => setTipoCartone(e.target.value)}>
-                {TIPI_CARTONE.map((t) => <option key={t}>{t}</option>)}
-              </SelectInput>
+            <Field label="Formato foglio" hint="es. 100×70 — filtra le schede articolo">
+              <TextInput placeholder="100×70" value={formato} onChange={(e) => cambiaFormato(e.target.value)} />
             </Field>
-            <Field label="Scheda articolo" hint={usaLibero ? "Disponibile solo per clienti in anagrafica" : "Solo articoli del cliente selezionato"}>
+            <Field label="Scheda articolo" hint={usaLibero ? "Disponibile solo per clienti in anagrafica" : formatoNorm ? "Solo schede con il formato digitato" : "Solo articoli del cliente selezionato"}>
               <SelectInput
                 value={articoloId}
                 onChange={(e) => selezionaArticolo(e.target.value)}
                 disabled={usaLibero}
               >
                 <option value="">
-                  {usaLibero ? "—" : articoliCliente.length === 0 ? "Nessun articolo per questo cliente" : "Seleziona articolo…"}
+                  {usaLibero ? "—" : articoliFiltrati.length === 0 ? "Nessuna scheda disponibile" : "Seleziona articolo…"}
                 </option>
-                {articoliCliente.map((a) => (
+                {articoliFiltrati.map((a) => (
                   <option key={a.id} value={a.id}>{a.codice} — {a.dimL}×{a.dimP}×{a.dimH}</option>
                 ))}
               </SelectInput>
             </Field>
+            {!usaLibero && formatoNorm && articoliFiltrati.length === 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                Nessuna scheda articolo trovata con questo formato
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Quantità fogli">
+                <TextInput type="number" min={1} placeholder="0" value={quantita} onChange={(e) => setQuantita(e.target.value)} />
+              </Field>
+              <Field label="Tipologia cartone">
+                <SelectInput value={tipoCartone} onChange={(e) => setTipoCartone(e.target.value)}>
+                  {TIPI_CARTONE.map((t) => <option key={t}>{t}</option>)}
+                </SelectInput>
+              </Field>
+            </div>
             {articoloSel && (
               <div className="rounded-lg bg-[#f7faf5] px-3 py-2 text-xs text-[#3f5248]">
                 <span className="font-semibold">Da scheda:</span> formato {articoloSel.formatoCartone || "—"} · {articoloSel.tipoCartone}
