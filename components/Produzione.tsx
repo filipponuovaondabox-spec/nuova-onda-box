@@ -6,6 +6,7 @@ import { useData, useToasts, operatoreCorrente, utenteCorrente } from "@/lib/sto
 import {
   Ordine, Pedana, Articolo, fmtNum, fmtPct, fmtData, fmtDataOra, oggiISO, uid, nomeCliente, labelArticolo,
   ordineProdotti, ordineScartati, ordineScatoleScartate, ordineImballati, ordinePedane, scartoPct, avanzamentoPct,
+  giacenzaCartoneArticolo,
 } from "@/lib/model";
 import { Card, CardHeader, Table, Btn, Field, TextInput, SelectInput, ConfirmModal, Modal, StatusBadge, ProgressBar } from "./ui-kit";
 import BozzaModal from "./BozzaModal";
@@ -23,7 +24,7 @@ export default function Produzione() {
   const [ricerca, setRicerca] = useState("");
 
   // Form nuovo ordine
-  const [nArticolo, setNArticolo] = useState(db.articoli[0]?.id ?? "");
+  const [nArticolo, setNArticolo] = useState("");
   const [nEntrata, setNEntrata] = useState("");
   const [nQta, setNQta] = useState("");
   const [nScadenza, setNScadenza] = useState(oggiISO());
@@ -43,16 +44,28 @@ export default function Produzione() {
     [db.entrate, nArticolo]
   );
 
+  // Solo ordini attivi/in lavorazione: i completati restano visibili nello Storico
+  const ordiniAttivi = useMemo(
+    () => db.ordini.filter((o) => o.stato !== "completato" && o.stato !== "spedito"),
+    [db.ordini]
+  );
+
   // Filtro live: cerca nel nome/codice articolo e nel nome del cliente (case-insensitive)
   const ordiniFiltrati = useMemo(() => {
     const q = ricerca.trim().toLowerCase();
-    if (!q) return db.ordini;
-    return db.ordini.filter((o) => {
+    if (!q) return ordiniAttivi;
+    return ordiniAttivi.filter((o) => {
       const articolo = labelArticolo(db, o.articoloId).toLowerCase();
       const cliente = nomeCliente(db, o.clienteId, o.clienteLibero).toLowerCase();
       return articolo.includes(q) || cliente.includes(q);
     });
-  }, [db, ricerca]);
+  }, [db, ricerca, ordiniAttivi]);
+
+  // Schede articolo con giacenza di cartone disponibile (entrate - consumi - uscite > 0)
+  const articoliConGiacenza = useMemo(
+    () => db.articoli.filter((a) => giacenzaCartoneArticolo(db, a.id) > 0),
+    [db]
+  );
 
   const creaOrdine = (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -359,7 +372,7 @@ export default function Produzione() {
         <Btn onClick={() => setNuovoOpen(true)}><Plus size={16} weight="bold" /> Nuovo ordine</Btn>
       </div>
 
-      {db.ordini.length > 0 && (
+      {ordiniAttivi.length > 0 && (
         <div className="relative max-w-md">
           <MagnifyingGlass
             size={16}
@@ -386,11 +399,16 @@ export default function Produzione() {
       )}
 
       <Card>
-        <Table head={["Codice", "Articolo", "Cliente", "Da produrre", "Prodotti", "Scarto", "Scadenza", "Stato", "Avanzamento", "Azioni", ""]}>
-          {ordiniFiltrati.map((o) => (
+        <Table head={["Codice", "Formato", "Cliente", "Da produrre", "Prodotti", "Scarto", "Scadenza", "Stato", "Avanzamento", "Azioni", ""]}>
+          {ordiniFiltrati.map((o) => {
+            const art = db.articoli.find((a) => a.id === o.articoloId);
+            return (
             <tr key={o.id} className="cursor-pointer hover:bg-[#f7faf5]" onClick={() => setSelezionato(o.id)}>
               <td className="px-4 py-3 font-mono text-xs font-semibold">{o.codice}</td>
-              <td className="px-4 py-3">{labelArticolo(db, o.articoloId)}</td>
+              <td className="px-4 py-3">
+                <span className="font-semibold text-[#1c2b22]">{art?.formatoCartone || "—"}</span>
+                <span className="block text-xs text-[#7fa08a]">{art?.codice ?? ""}</span>
+              </td>
               <td className="px-4 py-3">{nomeCliente(db, o.clienteId, o.clienteLibero)}</td>
               <td className="px-4 py-3 font-mono">{fmtNum(o.qtaRichiesta)}</td>
               <td className="px-4 py-3 font-mono">{fmtNum(ordineProdotti(o))}</td>
@@ -446,11 +464,12 @@ export default function Produzione() {
                 )}
               </td>
             </tr>
-          ))}
-          {db.ordini.length === 0 && (
-            <tr><td colSpan={11} className="px-4 py-6 text-center text-[#4a5d50]">Nessun ordine di produzione</td></tr>
+            );
+          })}
+          {ordiniAttivi.length === 0 && (
+            <tr><td colSpan={11} className="px-4 py-6 text-center text-[#4a5d50]">Nessun ordine attivo — gli ordini completati sono nello Storico</td></tr>
           )}
-          {db.ordini.length > 0 && ordiniFiltrati.length === 0 && (
+          {ordiniAttivi.length > 0 && ordiniFiltrati.length === 0 && (
             <tr><td colSpan={11} className="px-4 py-6 text-center text-[#4a5d50]">Nessun ordine trovato per la ricerca</td></tr>
           )}
         </Table>
@@ -459,14 +478,19 @@ export default function Produzione() {
       {/* Modal nuovo ordine */}
       <Modal open={nuovoOpen} title="Nuovo ordine di produzione" onClose={() => setNuovoOpen(false)}>
         <form onSubmit={creaOrdine} className="space-y-4">
-          <Field label="Scheda articolo">
+          <Field label="Scheda articolo" hint="Solo schede con giacenza di cartone disponibile">
             <SelectInput value={nArticolo} onChange={(e) => { setNArticolo(e.target.value); setNEntrata(""); }}>
-              {db.articoli.length === 0 && <option value="">Nessuna scheda articolo disponibile</option>}
-              {db.articoli.map((a) => (
-                <option key={a.id} value={a.id}>{a.codice} — {a.dimL}×{a.dimP}×{a.dimH} ({nomeCliente(db, a.clienteId, a.clienteLibero)})</option>
+              <option value="">{articoliConGiacenza.length === 0 ? "Nessuna scheda con giacenza disponibile" : "Seleziona articolo…"}</option>
+              {articoliConGiacenza.map((a) => (
+                <option key={a.id} value={a.id}>{a.codice} — {a.dimL}×{a.dimP}×{a.dimH} ({nomeCliente(db, a.clienteId, a.clienteLibero)}) · giacenza {fmtNum(giacenzaCartoneArticolo(db, a.id))}</option>
               ))}
             </SelectInput>
           </Field>
+          {articoliConGiacenza.length === 0 && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+              Nessuna scheda articolo ha giacenza di cartone disponibile. Registra prima un'entrata di magazzino collegata a una scheda articolo.
+            </div>
+          )}
           {(() => {
             const artSel = db.articoli.find((a) => a.id === nArticolo);
             if (!artSel) return null;
