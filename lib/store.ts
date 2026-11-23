@@ -6,6 +6,7 @@ import {
   Segnalazione, StatoSegnalazione, Utente,
   ordineImballati, speditoPerOrdine,
 } from "./model";
+import { fetchDb, saveDb, VersionConflictError } from "./db";
 
 const EMPTY_DB: DB = {
   clienti: [],
@@ -245,7 +246,9 @@ export const useData = create<DataStore>()((set, get) => ({
 // Polling ridotto a 30s (solo a scheda visibile) per non esaurire la quota
 // gratuita giornaliera di richieste Cloudflare; salvataggio con debounce ~2s.
 const POLL_MS = 30000;
-const SAVE_DEBOUNCE_MS = 2000;
+// Invio quasi immediato: ogni modifica locale parte verso il server dopo
+// ~1s di debounce (raggruppa le digitazioni rapide), non al ciclo di polling.
+const SAVE_DEBOUNCE_MS = 1000;
 // Backoff progressivo dei tentativi di salvataggio falliti: 10s → 30s → 60s
 const RETRY_DELAYS_MS = [10000, 30000, 60000];
 const CACHE_KEY = "nuova-onda-box-cache-v1";
@@ -263,9 +266,65 @@ let cloudMode = false;
 // salvato con successo sul server. Finché è true gli stati in arrivo dal
 // polling vengono IGNORATI (mai sovrascrivere/scartare le modifiche locali).
 let hasUnsyncedChanges = false;
+// Versione dell'archivio sul server su cui si basa lo stato locale
+// (null = versione sconosciuta, es. modalità localStorage mai sincronizzata)
+let serverVersion: number | null = null;
 
 function snapshot(): string {
   return JSON.stringify(pickDb(useData.getState()));
+}
+
+// ─── Merge intelligente per id ──────────────────────────────────────────────
+// Unisce lo stato remoto con le modifiche locali pendenti senza perdere nulla:
+// - gli elementi presenti solo da una parte vengono mantenuti;
+// - in caso di conflitto sullo stesso id vince la versione "più recente"
+//   (campi aggiornataIl/completatoIl/aggiornataIl ecc.; a parità vince il
+//   locale, che contiene le modifiche appena fatte dall'utente).
+type WithId = { id: string };
+
+function recordTimestamp(x: unknown): number {
+  if (!x || typeof x !== "object") return 0;
+  const r = x as Record<string, unknown>;
+  const fields = ["aggiornataIl", "completatoIl", "iniziatoIl", "creatoIl", "data"];
+  let best = 0;
+  for (const f of fields) {
+    const v = r[f];
+    if (typeof v === "string") {
+      const t = Date.parse(v);
+      if (!isNaN(t) && t > best) best = t;
+    }
+  }
+  return best;
+}
+
+function mergeCollection<T extends WithId>(remote: T[], local: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const item of remote) map.set(item.id, item);
+  for (const item of local) {
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+    } else {
+      // Conflitto sullo stesso id: vince il record con timestamp più recente;
+      // a parità (o senza timestamp) vince la copia locale (modifica appena fatta)
+      const lt = recordTimestamp(item);
+      const rt = recordTimestamp(existing);
+      if (lt >= rt) map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function mergeDb(remote: DB, local: DB): DB {
+  return {
+    clienti: mergeCollection(remote.clienti, local.clienti),
+    articoli: mergeCollection(remote.articoli, local.articoli),
+    entrate: mergeCollection(remote.entrate, local.entrate),
+    ordini: mergeCollection(remote.ordini, local.ordini),
+    spedizioni: mergeCollection(remote.spedizioni, local.spedizioni),
+    segnalazioni: mergeCollection(remote.segnalazioni, local.segnalazioni),
+    utenti: mergeCollection(remote.utenti, local.utenti),
+  };
 }
 
 let lastSavedSnapshot = "";
@@ -303,15 +362,13 @@ function saveLocalCache() {
 async function pullFromServer(): Promise<boolean> {
   const { setStatus, setLastSync } = useSync.getState();
   try {
-    const res = await fetch("/api/db", { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json?.ok || !json.db) throw new Error("Risposta non valida");
+    const { db: remoteRaw, version } = await fetchDb();
 
     // API raggiungibile → modalità cloud (Cloudflare Pages Functions + D1)
     cloudMode = true;
+    serverVersion = version;
 
-    const remoteDb = normalizeDb(json.db);
+    const remoteDb = normalizeDb(remoteRaw);
     const remote = JSON.stringify(remoteDb);
     const local = snapshot();
 
@@ -364,27 +421,37 @@ async function pushToServer() {
   saveInFlight = true;
   setStatus("syncing");
   try {
-    const db = pickDb(useData.getState());
-    const snap = JSON.stringify(db);
-    const res = await fetch("/api/db", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ db }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json().catch(() => null);
-    if (!json?.ok) throw new Error("Salvataggio rifiutato dal server");
+    let db = pickDb(useData.getState());
+    let result: { savedAt: string; version: number };
+    try {
+      result = await saveDb(db, serverVersion);
+    } catch (err) {
+      if (!(err instanceof VersionConflictError)) throw err;
+      // Conflitto di versione: un altro utente ha salvato nel frattempo.
+      // Scarica i dati remoti e fai MERGE con le modifiche locali pendenti
+      // (unione per id, nessuna modifica va persa), poi riprova il salvataggio.
+      const { db: remoteRaw, version } = await fetchDb();
+      const remoteDb = normalizeDb(remoteRaw);
+      const merged = mergeDb(remoteDb, db);
+      applyingRemote = true;
+      useData.setState({ ...merged, hydrated: true });
+      applyingRemote = false;
+      serverVersion = version;
+      db = merged;
+      result = await saveDb(db, serverVersion);
+    }
     // Scrittura riuscita → il backend Cloudflare è attivo e non ci sono più
     // modifiche locali pendenti: da ora il polling può di nuovo applicare gli
     // stati in arrivo dal server.
     cloudMode = true;
+    serverVersion = result.version;
     hasUnsyncedChanges = false;
     retryAttempt = 0;
     if (retryTimer) {
       clearTimeout(retryTimer);
       retryTimer = null;
     }
-    lastSavedSnapshot = snap;
+    lastSavedSnapshot = JSON.stringify(db);
     saveLocalCache();
     setLastSync(new Date().toISOString());
     setStatus("synced");
