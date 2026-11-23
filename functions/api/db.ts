@@ -80,6 +80,14 @@ async function ensureSchema(db: D1Database): Promise<void> {
   );
   await db.batch(statements);
 
+  // Tabella meta: versione dell'archivio, incrementata a ogni salvataggio
+  await db
+    .prepare("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    .run();
+  await db
+    .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('version', '0')")
+    .run();
+
   // Seed: utente admin predefinito, solo se la tabella utenti è vuota
   const row = await db
     .prepare("SELECT COUNT(*) AS n FROM utenti")
@@ -127,6 +135,13 @@ async function readDb(db: D1Database) {
   return result;
 }
 
+async function readVersion(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT value FROM meta WHERE key = 'version'")
+    .first<{ value: string }>();
+  return row ? Number(row.value) || 0 : 0;
+}
+
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
 export async function onRequestGet(
@@ -135,7 +150,8 @@ export async function onRequestGet(
   try {
     await ensureSchema(context.env.DB);
     const db = await readDb(context.env.DB);
-    return jsonResponse({ ok: true, db, serverTime: new Date().toISOString() });
+    const version = await readVersion(context.env.DB);
+    return jsonResponse({ ok: true, db, version, serverTime: new Date().toISOString() });
   } catch (err) {
     return jsonResponse(
       { ok: false, error: "Errore lettura database", detail: String(err) },
@@ -148,9 +164,9 @@ export async function onRequestPut(
   context: PagesFunctionContext<Env>
 ): Promise<Response> {
   try {
-    let body: { db?: Record<string, unknown> };
+    let body: { db?: Record<string, unknown>; baseVersion?: unknown };
     try {
-      body = (await context.request.json()) as { db?: Record<string, unknown> };
+      body = (await context.request.json()) as { db?: Record<string, unknown>; baseVersion?: unknown };
     } catch {
       return jsonResponse({ ok: false, error: "Payload non valido" }, 400);
     }
@@ -161,6 +177,22 @@ export async function onRequestPut(
 
     await ensureSchema(context.env.DB);
     const d1 = context.env.DB;
+
+    // Controllo di versione: il client dichiara su quale versione si basa.
+    // Se il server è più avanti, il salvataggio viene rifiutato (409): il
+    // client scaricherà i dati remoti, farà il merge e riproverà.
+    const currentVersion = await readVersion(d1);
+    const baseVersion =
+      typeof body.baseVersion === "number" && Number.isFinite(body.baseVersion)
+        ? body.baseVersion
+        : null;
+    if (baseVersion !== null && baseVersion < currentVersion) {
+      return jsonResponse(
+        { ok: false, error: "version_conflict", version: currentVersion },
+        409
+      );
+    }
+    const newVersion = currentVersion + 1;
 
     // Validazione minima della forma + ricostruzione atomica delle tabelle.
     // db.batch() è transazionale: o si salva tutto o non si salva niente.
@@ -181,9 +213,14 @@ export async function onRequestPut(
         );
       }
     }
+    statements.push(
+      d1
+        .prepare("INSERT INTO meta (key, value) VALUES ('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(String(newVersion))
+    );
     await d1.batch(statements);
 
-    return jsonResponse({ ok: true, savedAt: new Date().toISOString() });
+    return jsonResponse({ ok: true, savedAt: new Date().toISOString(), version: newVersion });
   } catch (err) {
     return jsonResponse(
       { ok: false, error: "Errore salvataggio database", detail: String(err) },
