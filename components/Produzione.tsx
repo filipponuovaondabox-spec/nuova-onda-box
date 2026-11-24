@@ -488,7 +488,7 @@ export default function Produzione() {
           </Field>
           {articoliConGiacenza.length === 0 && (
             <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-              Nessuna scheda articolo ha giacenza di cartone disponibile. Registra prima un'entrata di magazzino collegata a una scheda articolo.
+              Nessuna scheda articolo ha giacenza di cartone disponibile. Registra prima un&apos;entrata di magazzino collegata a una scheda articolo.
             </div>
           )}
           {(() => {
