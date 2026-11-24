@@ -85,3 +85,4 @@ npm run pages:dev    # build + wrangler pages dev (D1 locale in .wrangler/)
 | `functions/api/db.ts`| API condivisa (Pages Function) con persistenza su D1   |
 | `wrangler.toml`      | Configurazione Cloudflare (nome progetto, output, D1)  |
 | `public/`            | Asset statici, manifest PWA, service worker            |
+ 
